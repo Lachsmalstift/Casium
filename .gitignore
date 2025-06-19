@@ -15,8 +15,10 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 
+#Casium.exe
+casiumm.exe
+
 # Compiler-Outputs
-*.exe
 *.o
 *.obj
 *.dll
