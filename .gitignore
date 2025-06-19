@@ -1,0 +1,32 @@
+# Visual Studio Code Workspace
+.vscode/
+
+# Build Ordner
+build/
+
+# Output Ordner (fertige .exe etc.)
+output/
+
+# Inno Setup Skripte
+*.iss
+
+# Windows spezifische temporäre Dateien
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Compiler-Outputs
+*.exe
+*.o
+*.obj
+*.dll
+
+# Logdateien
+*.log
+*.bak
+
+# MacOS spezifisch (falls mal von Mac bearbeitet wird)
+.DS_Store
+
+# Temp-Dateien von Editoren
+*~
