@@ -19,7 +19,7 @@
 #define MAX_ZEILE    1024
 #define MAX_DATEN    1000
 #define CASIUM_VERSION "v1.0.0"
-#define CASIUM_AUTOR   "Entwickelt von C. Dentmon"
+#define CASIUM_AUTOR   "Entwickelt von Christopher Lane Charles Dentmon"
 
 // Zeigt Fehlermeldung an und schreibt ins Log
 void logFehler(const wchar_t *nachricht) {
