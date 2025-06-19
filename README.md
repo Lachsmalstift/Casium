@@ -37,9 +37,8 @@ Siehe die ausführliche Lizenz in der Datei [`LICENSE.md`](LICENSE.md).
 
 Urheber:  
 Made with tears and hate in Mesum
-Christopher Lane Charles Dentmon  
-(c) 2024
-
+by Christopher Lane Charles Dentmon  
+(c) 2025
 ---
 
 ## Changelog
