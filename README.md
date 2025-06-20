@@ -20,7 +20,7 @@ Es dient zur schnellen Umwandlung von Mapping-Tabellen (z. B. IDs, Personalnumme
 
 ## Nutzung
 
-- Starte Casium über die Konsole.
+- Downloade und Starte die Casium.exe - falls dein PC aufgrund der fehlenden Signatur ein Problem meldet, nutze den Installer.
 - Gib den Pfad zur CSV-Datei an (mit oder ohne Anführungszeichen).
 - Wähle die gewünschten Spalten aus.
 - Das Programm erstellt automatisch den fertigen SQL CASE Ausdruck.
