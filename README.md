@@ -33,7 +33,7 @@ Es dient zur schnellen Umwandlung von Mapping-Tabellen (z. B. IDs, Personalnumme
 Dieses Projekt steht unter der  
 Creative Commons Attribution 4.0 International License (CC BY 4.0).
 
-Siehe die ausführliche Lizenz in der Datei [`LICENSE.md`](LICENSE.md).
+Siehe die ausführliche Lizenz in der Datei [`Lizenz.md`](Lizenz.md).
 
 Urheber:  
 Made with tears and hate in Mesum
@@ -43,7 +43,7 @@ by Christopher Lane Charles Dentmon
 
 ## Changelog
 
-Siehe [`CHANGELOG.md`](CHANGELOG.md).
+Siehe [`Cangelog.md`](Changelog.md).
 
 ---
 
