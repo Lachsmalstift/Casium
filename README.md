@@ -24,7 +24,7 @@ Es dient zur schnellen Umwandlung von Mapping-Tabellen (z. B. IDs, Personalnumme
 - Gib den Pfad zur CSV-Datei an (mit oder ohne Anführungszeichen).
 - Wähle die gewünschten Spalten aus.
 - Das Programm erstellt automatisch den fertigen SQL CASE Ausdruck.
-- Die Ausgabe wird in der Datei `FertigerCase.txt` gespeichert (oder in einer selbstgewählten Datei).
+- Die Ausgabe wird in der Datei `FertigerCase.txt` gespeichert.
 
 ---
 
