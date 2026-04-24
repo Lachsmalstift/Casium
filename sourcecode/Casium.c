@@ -22,7 +22,7 @@
 #define MAX_SPALTEN   100
 #define MAX_PFAD      512
 #define MAX_VORSCHAU  20
-#define CASIUM_VERSION "v1.2.0"
+#define CASIUM_VERSION "v1.3.0"
 #define CASIUM_AUTOR   "Entwickelt von Christopher Lane Charles Dentmon"
 
 typedef struct { char quelle[256]; char ziel[256]; } Zuordnung;
@@ -49,7 +49,6 @@ void konvertiere1252ZuWide(const char *input, wchar_t *output, int size) {
     MultiByteToWideChar(CP_ACP, 0, input, -1, output, size);
 }
 
-// Verdoppelt ' für SQL-Strings
 static void maskiereApostrophe(const char *ein, char *aus, size_t max) {
     size_t pos = 0;
     for (size_t i = 0; ein[i] && pos + 1 < max; ++i) {
@@ -62,7 +61,6 @@ static void maskiereApostrophe(const char *ein, char *aus, size_t max) {
     aus[pos] = '\0';
 }
 
-// Escaped " und \ für JSON
 static void maskiereJSON(const char *ein, char *aus, size_t max) {
     size_t pos = 0;
     for (size_t i = 0; ein[i] && pos + 1 < max; ++i) {
@@ -76,13 +74,11 @@ static void maskiereJSON(const char *ein, char *aus, size_t max) {
     aus[pos] = '\0';
 }
 
-// Leert stdin bis Zeilenende — verhindert Endlosschleife bei ungültiger Eingabe
 static void leereStdin(void) {
     wint_t c;
     while ((c = fgetwc(stdin)) != L'\n' && c != WEOF);
 }
 
-// Erkennt das häufigere Trennzeichen in der Kopfzeile
 static char erkenneTrenner(const char *kopfzeile) {
     int kommas = 0, semis = 0;
     for (const char *p = kopfzeile; *p; p++) {
@@ -92,9 +88,16 @@ static char erkenneTrenner(const char *kopfzeile) {
     return (semis >= kommas) ? ';' : ',';
 }
 
+static void trimChar(char *s) {
+    char *start = s;
+    while (isspace((unsigned char)*start)) start++;
+    memmove(s, start, strlen(start) + 1);
+    size_t len = strlen(s);
+    while (len > 0 && isspace((unsigned char)s[len-1])) s[--len] = '\0';
+}
+
 // ============================================================
 //  RFC-4180-konformer CSV-Parser
-//  Behandelt: "Feld, mit Komma", "Feld ""mit"" Quotes", leere Felder
 // ============================================================
 static int parseCSVZeile(const char *zeile, char sep, char felder[][MAX_ZEILE], int maxFelder) {
     int n = 0;
@@ -106,18 +109,16 @@ static int parseCSVZeile(const char *zeile, char sep, char felder[][MAX_ZEILE], 
             p++;
             while (*p) {
                 if (*p == '"') {
-                    if (*(p+1) == '"') { // escaped quote ""
-                        if (pos < MAX_ZEILE - 1) dst[pos++] = '"';
-                        p += 2;
-                    } else { p++; break; } // end of quoted field
+                    if (*(p+1) == '"') { if (pos < MAX_ZEILE-1) dst[pos++] = '"'; p += 2; }
+                    else { p++; break; }
                 } else {
-                    if (pos < MAX_ZEILE - 1) dst[pos++] = *p;
+                    if (pos < MAX_ZEILE-1) dst[pos++] = *p;
                     p++;
                 }
             }
         } else {
             while (*p && *p != sep && *p != '\r' && *p != '\n') {
-                if (pos < MAX_ZEILE - 1) dst[pos++] = *p;
+                if (pos < MAX_ZEILE-1) dst[pos++] = *p;
                 p++;
             }
         }
@@ -130,17 +131,60 @@ static int parseCSVZeile(const char *zeile, char sep, char felder[][MAX_ZEILE], 
 }
 
 // ============================================================
+//  Clipboard
+// ============================================================
+
+// Liest die gespeicherte UTF-8-Datei zurück und übergibt sie an die Zwischenablage
+static void kopiereInZwischenablage(const wchar_t *pfad) {
+    FILE *f = _wfopen(pfad, L"rb");
+    if (!f) { logFehler(L"Zwischenablage: Ausgabedatei konnte nicht gelesen werden."); return; }
+
+    fseek(f, 0, SEEK_END);
+    long bytes = ftell(f);
+    rewind(f);
+
+    char *utf8 = malloc(bytes + 1);
+    if (!utf8) { fclose(f); return; }
+    fread(utf8, 1, bytes, f);
+    utf8[bytes] = '\0';
+    fclose(f);
+
+    // UTF-8 BOM überspringen falls vorhanden
+    char *src = utf8;
+    if (bytes >= 3 && (unsigned char)src[0]==0xEF && (unsigned char)src[1]==0xBB && (unsigned char)src[2]==0xBF)
+        src += 3;
+
+    // UTF-8 → UTF-16 für Windows Clipboard
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, src, -1, NULL, 0);
+    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, wlen * sizeof(wchar_t));
+    if (!hMem) { free(utf8); return; }
+
+    wchar_t *wbuf = (wchar_t *)GlobalLock(hMem);
+    MultiByteToWideChar(CP_UTF8, 0, src, -1, wbuf, wlen);
+    GlobalUnlock(hMem);
+    free(utf8);
+
+    if (OpenClipboard(NULL)) {
+        EmptyClipboard();
+        SetClipboardData(CF_UNICODETEXT, hMem); // Clipboard übernimmt Ownership von hMem
+        CloseClipboard();
+        wprintf(L"In Zwischenablage kopiert.\n");
+    } else {
+        GlobalFree(hMem);
+        logFehler(L"Zwischenablage konnte nicht geöffnet werden.");
+    }
+}
+
+// ============================================================
 //  CSV-Lesen
 // ============================================================
 
-// Liest Kopfzeile, füllt spalten[] und *sep_out — Datei bleibt offen
 static int leseKopfzeile(FILE *datei, char *sep_out, char spalten[][256], int *nSpalten) {
     char zeile[MAX_ZEILE];
     if (!fgets(zeile, MAX_ZEILE, datei)) {
         logFehler(L"Kopfzeile konnte nicht gelesen werden.");
         return 1;
     }
-    // BOM entfernen
     if ((unsigned char)zeile[0]==0xEF && (unsigned char)zeile[1]==0xBB && (unsigned char)zeile[2]==0xBF)
         memmove(zeile, zeile+3, strlen(zeile+3)+1);
 
@@ -158,7 +202,6 @@ static int leseKopfzeile(FILE *datei, char *sep_out, char spalten[][256], int *n
     return 0;
 }
 
-// Liest Datenzeilen für die gewählten Spaltenindizes
 static void leseDaten(FILE *datei, char sep, int idxQ, int idxZ,
                       Zuordnung *daten, int *anzahl, int *leere, int *doppelte) {
     *anzahl = *leere = *doppelte = 0;
@@ -180,22 +223,18 @@ static void leseDaten(FILE *datei, char sep, int idxQ, int idxZ,
 }
 
 // ============================================================
-//  Ausgabe-Generierung (4 Formate)
-//  vorschauLimit == 0 → kein Limit (für Dateiausgabe)
-//  vorschauLimit > 0  → Vorschau auf stdout begrenzen
+//  Ausgabe-Generierung
 // ============================================================
 
 static void schreibeCase(const Zuordnung *d, int n, const char *orig, const char *alias,
                          const char *elseWert, FILE *out, int lim) {
     wchar_t wOrig[256], wAlias[256];
-    konvertiere1252ZuWide(orig,  wOrig,  256);
-    konvertiere1252ZuWide(alias, wAlias, 256);
+    konvertiere1252ZuWide(orig, wOrig, 256); konvertiere1252ZuWide(alias, wAlias, 256);
     int zeige = (lim > 0 && n > lim) ? lim : n;
     fwprintf(out, L"CASE\n");
     for (int i = 0; i < zeige; i++) {
         char q[512], z[512]; wchar_t wq[512], wz[512];
-        maskiereApostrophe(d[i].quelle, q, sizeof(q));
-        maskiereApostrophe(d[i].ziel,   z, sizeof(z));
+        maskiereApostrophe(d[i].quelle, q, sizeof(q)); maskiereApostrophe(d[i].ziel, z, sizeof(z));
         konvertiere1252ZuWide(q, wq, 512); konvertiere1252ZuWide(z, wz, 512);
         fwprintf(out, L"  WHEN %s = '%s' THEN '%s'\n", wOrig, wq, wz);
     }
@@ -204,8 +243,7 @@ static void schreibeCase(const Zuordnung *d, int n, const char *orig, const char
         fwprintf(out, L"  ELSE NULL\nEND AS %s;\n", wAlias);
     } else {
         char esc[512]; wchar_t wElse[512];
-        maskiereApostrophe(elseWert, esc, sizeof(esc));
-        konvertiere1252ZuWide(esc, wElse, 512);
+        maskiereApostrophe(elseWert, esc, sizeof(esc)); konvertiere1252ZuWide(esc, wElse, 512);
         fwprintf(out, L"  ELSE '%s'\nEND AS %s;\n", wElse, wAlias);
     }
 }
@@ -213,14 +251,12 @@ static void schreibeCase(const Zuordnung *d, int n, const char *orig, const char
 static void schreibeDecode(const Zuordnung *d, int n, const char *orig, const char *alias,
                             const char *elseWert, FILE *out, int lim) {
     wchar_t wOrig[256], wAlias[256];
-    konvertiere1252ZuWide(orig,  wOrig,  256);
-    konvertiere1252ZuWide(alias, wAlias, 256);
+    konvertiere1252ZuWide(orig, wOrig, 256); konvertiere1252ZuWide(alias, wAlias, 256);
     int zeige = (lim > 0 && n > lim) ? lim : n;
     fwprintf(out, L"DECODE(%s\n", wOrig);
     for (int i = 0; i < zeige; i++) {
         char q[512], z[512]; wchar_t wq[512], wz[512];
-        maskiereApostrophe(d[i].quelle, q, sizeof(q));
-        maskiereApostrophe(d[i].ziel,   z, sizeof(z));
+        maskiereApostrophe(d[i].quelle, q, sizeof(q)); maskiereApostrophe(d[i].ziel, z, sizeof(z));
         konvertiere1252ZuWide(q, wq, 512); konvertiere1252ZuWide(z, wz, 512);
         fwprintf(out, L"  , '%s', '%s'\n", wq, wz);
     }
@@ -229,8 +265,7 @@ static void schreibeDecode(const Zuordnung *d, int n, const char *orig, const ch
         fwprintf(out, L"  , NULL\n) AS %s\n", wAlias);
     } else {
         char esc[512]; wchar_t wElse[512];
-        maskiereApostrophe(elseWert, esc, sizeof(esc));
-        konvertiere1252ZuWide(esc, wElse, 512);
+        maskiereApostrophe(elseWert, esc, sizeof(esc)); konvertiere1252ZuWide(esc, wElse, 512);
         fwprintf(out, L"  , '%s'\n) AS %s\n", wElse, wAlias);
     }
 }
@@ -238,17 +273,15 @@ static void schreibeDecode(const Zuordnung *d, int n, const char *orig, const ch
 static void schreibeValues(const Zuordnung *d, int n, const char *orig, const char *alias,
                             FILE *out, int lim) {
     wchar_t wOrig[256], wAlias[256];
-    konvertiere1252ZuWide(orig,  wOrig,  256);
-    konvertiere1252ZuWide(alias, wAlias, 256);
+    konvertiere1252ZuWide(orig, wOrig, 256); konvertiere1252ZuWide(alias, wAlias, 256);
     int zeige = (lim > 0 && n > lim) ? lim : n;
     int hatMehr = (lim > 0 && n > lim);
     fwprintf(out, L"SELECT *\nFROM (VALUES\n");
     for (int i = 0; i < zeige; i++) {
         char q[512], z[512]; wchar_t wq[512], wz[512];
-        maskiereApostrophe(d[i].quelle, q, sizeof(q));
-        maskiereApostrophe(d[i].ziel,   z, sizeof(z));
+        maskiereApostrophe(d[i].quelle, q, sizeof(q)); maskiereApostrophe(d[i].ziel, z, sizeof(z));
         konvertiere1252ZuWide(q, wq, 512); konvertiere1252ZuWide(z, wz, 512);
-        const wchar_t *komma = (i < zeige - 1 || hatMehr) ? L"," : L"";
+        const wchar_t *komma = (i < zeige-1 || hatMehr) ? L"," : L"";
         fwprintf(out, L"  ('%s', '%s')%s\n", wq, wz, komma);
     }
     if (hatMehr) fwprintf(out, L"  -- ... (%d weitere)\n", n - lim);
@@ -258,17 +291,15 @@ static void schreibeValues(const Zuordnung *d, int n, const char *orig, const ch
 static void schreibeJSON(const Zuordnung *d, int n, const char *orig, const char *alias,
                           FILE *out, int lim) {
     wchar_t wOrig[256], wAlias[256];
-    konvertiere1252ZuWide(orig,  wOrig,  256);
-    konvertiere1252ZuWide(alias, wAlias, 256);
+    konvertiere1252ZuWide(orig, wOrig, 256); konvertiere1252ZuWide(alias, wAlias, 256);
     int zeige = (lim > 0 && n > lim) ? lim : n;
     int hatMehr = (lim > 0 && n > lim);
     fwprintf(out, L"{\n  \"quelle\": \"%s\",\n  \"ziel\": \"%s\",\n  \"mapping\": {\n", wOrig, wAlias);
     for (int i = 0; i < zeige; i++) {
         char q[512], z[512]; wchar_t wq[512], wz[512];
-        maskiereJSON(d[i].quelle, q, sizeof(q));
-        maskiereJSON(d[i].ziel,   z, sizeof(z));
+        maskiereJSON(d[i].quelle, q, sizeof(q)); maskiereJSON(d[i].ziel, z, sizeof(z));
         konvertiere1252ZuWide(q, wq, 512); konvertiere1252ZuWide(z, wz, 512);
-        const wchar_t *komma = (i < zeige - 1 || hatMehr) ? L"," : L"";
+        const wchar_t *komma = (i < zeige-1 || hatMehr) ? L"," : L"";
         fwprintf(out, L"    \"%s\": \"%s\"%s\n", wq, wz, komma);
     }
     if (hatMehr) fwprintf(out, L"    /* ... %d weitere */\n", n - lim);
@@ -297,15 +328,11 @@ static void speichereAusgabe(const wchar_t *pfad, const char *orig, const char *
 }
 
 // ============================================================
-//  Interaktive Eingaben
+//  Interaktive Eingabe-Helfer
 // ============================================================
 
 static AusgabeFormat waehleFormat(void) {
-    wprintf(L"\nAusgabeformat:\n");
-    wprintf(L"  [1] SQL CASE (Standard)\n");
-    wprintf(L"  [2] DECODE (Oracle)\n");
-    wprintf(L"  [3] VALUES-Tabelle\n");
-    wprintf(L"  [4] JSON\n");
+    wprintf(L"\nAusgabeformat:\n  [1] SQL CASE\n  [2] DECODE (Oracle)\n  [3] VALUES-Tabelle\n  [4] JSON\n");
     int wahl = -1;
     do {
         wprintf(L"Format (1-4, Enter = 1): ");
@@ -331,16 +358,138 @@ static void waehleElseWert(char *elseWert, size_t maxSize) {
 }
 
 // ============================================================
+//  Batch-Modus
+// ============================================================
+
+typedef struct {
+    wchar_t csv[MAX_PFAD];
+    int     quellspalte;
+    int     zielspalte;
+    char    alias[256];
+    AusgabeFormat format;
+    char    elseWert[256];
+    wchar_t ausgabe[MAX_PFAD];
+    int     clipboard;
+    // Pflichtfelder gesetzt?
+    int     csvSet, quelleSet, zielSet, aliasSet;
+} BatchConfig;
+
+static int leseBatchConfig(const wchar_t *pfad, BatchConfig *cfg) {
+    memset(cfg, 0, sizeof(*cfg));
+    strncpy(cfg->elseWert, "Unbekannt", sizeof(cfg->elseWert) - 1);
+    cfg->format = FORMAT_CASE;
+    wcscpy(cfg->ausgabe, L"FertigerCase.txt");
+
+    FILE *f = _wfopen(pfad, L"r");
+    if (!f) { logFehler(L"Batch-Konfigurationsdatei nicht gefunden."); return 1; }
+
+    char zeile[512];
+    while (fgets(zeile, sizeof(zeile), f)) {
+        zeile[strcspn(zeile, "\r\n")] = '\0';
+        if (!zeile[0] || zeile[0] == '#') continue;
+
+        char *eq = strchr(zeile, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        char *key = zeile, *val = eq + 1;
+        trimChar(key); trimChar(val);
+
+        if (_stricmp(key, "csv") == 0) {
+            MultiByteToWideChar(CP_ACP, 0, val, -1, cfg->csv, MAX_PFAD);
+            cfg->csvSet = 1;
+        } else if (_stricmp(key, "quellspalte") == 0) {
+            cfg->quellspalte = atoi(val); cfg->quelleSet = 1;
+        } else if (_stricmp(key, "zielspalte") == 0) {
+            cfg->zielspalte = atoi(val); cfg->zielSet = 1;
+        } else if (_stricmp(key, "alias") == 0) {
+            strncpy(cfg->alias, val, sizeof(cfg->alias) - 1);
+            cfg->alias[sizeof(cfg->alias) - 1] = '\0';
+            cfg->aliasSet = 1;
+        } else if (_stricmp(key, "format") == 0) {
+            int fmt = atoi(val);
+            if (fmt >= 1 && fmt <= 4) cfg->format = (AusgabeFormat)fmt;
+        } else if (_stricmp(key, "else") == 0) {
+            strncpy(cfg->elseWert, val, sizeof(cfg->elseWert) - 1);
+            cfg->elseWert[sizeof(cfg->elseWert) - 1] = '\0';
+        } else if (_stricmp(key, "ausgabe") == 0) {
+            MultiByteToWideChar(CP_ACP, 0, val, -1, cfg->ausgabe, MAX_PFAD);
+        } else if (_stricmp(key, "clipboard") == 0) {
+            cfg->clipboard = atoi(val);
+        }
+    }
+    fclose(f);
+
+    if (!cfg->csvSet || !cfg->quelleSet || !cfg->zielSet || !cfg->aliasSet) {
+        logFehler(L"Batch-Konfiguration unvollständig. Erforderlich: csv, quellspalte, zielspalte, alias");
+        return 1;
+    }
+    return 0;
+}
+
+static void verarbeiteBatchDatei(const wchar_t *pfad) {
+    BatchConfig cfg;
+    if (leseBatchConfig(pfad, &cfg)) return;
+
+    wprintf(L"Batch-Modus: %s\n", cfg.csv);
+
+    if (_waccess(cfg.csv, 0) != 0) {
+        wchar_t err[MAX_PFAD + 64];
+        swprintf(err, MAX_PFAD + 64, L"CSV nicht gefunden: %s", cfg.csv);
+        logFehler(err); return;
+    }
+
+    FILE *datei = _wfopen(cfg.csv, L"r");
+    if (!datei) { logFehler(L"CSV konnte nicht geöffnet werden."); return; }
+
+    fseek(datei, 0, SEEK_END);
+    if (ftell(datei) == 0) { logFehler(L"CSV ist leer."); fclose(datei); return; }
+    rewind(datei);
+
+    char sep;
+    char spaltenNamen[MAX_SPALTEN][256];
+    int nSpalten;
+    if (leseKopfzeile(datei, &sep, spaltenNamen, &nSpalten)) { fclose(datei); return; }
+
+    if (cfg.quellspalte >= nSpalten || cfg.zielspalte >= nSpalten) {
+        logFehler(L"Spaltenindex außerhalb des gültigen Bereichs."); fclose(datei); return;
+    }
+
+    Zuordnung *daten = malloc(MAX_DATEN * sizeof(Zuordnung));
+    if (!daten) { logFehler(L"Speicherfehler."); fclose(datei); return; }
+
+    int count, skipEmpty, skipDup;
+    leseDaten(datei, sep, cfg.quellspalte, cfg.zielspalte, daten, &count, &skipEmpty, &skipDup);
+    fclose(datei);
+
+    wprintf(L"Batch: %d Einträge | %d leer | %d Duplikate\n", count, skipEmpty, skipDup);
+    speichereAusgabe(cfg.ausgabe, spaltenNamen[cfg.quellspalte], cfg.alias, cfg.elseWert, cfg.format, daten, count);
+    wprintf(L"Gespeichert: %s\n", cfg.ausgabe);
+
+    if (cfg.clipboard) kopiereInZwischenablage(cfg.ausgabe);
+
+    free(daten);
+}
+
+// ============================================================
 //  main
 // ============================================================
 
-int main(void) {
+int main(int argc, char *argv[]) {
     _setmbcp(_MB_CP_1252);
     setlocale(LC_ALL, "");
     _setmode(_fileno(stdout), _O_WTEXT);
 
     wprintf(L"Casium SQL CASE Generator %hs\n%hs\n\n", CASIUM_VERSION, CASIUM_AUTOR);
 
+    // Batch-Modus: casium.exe config.cfg
+    if (argc > 1) {
+        wchar_t batchPfad[MAX_PFAD];
+        MultiByteToWideChar(CP_ACP, 0, argv[1], -1, batchPfad, MAX_PFAD);
+        verarbeiteBatchDatei(batchPfad);
+        return 0;
+    }
+
+    // Interaktiver Modus
     Zuordnung *daten = malloc(MAX_DATEN * sizeof(Zuordnung));
     if (!daten) { logFehler(L"Speicherfehler beim Start."); return 1; }
 
@@ -350,13 +499,11 @@ int main(void) {
     char sep;
 
     while (1) {
-        // --- CSV-Pfad einlesen ---
         wprintf(L"Pfad zur CSV (q zum Beenden): ");
         fgetws(csvPfad, MAX_PFAD, stdin);
         csvPfad[wcscspn(csvPfad, L"\r\n")] = L'\0';
         if (wcslen(csvPfad) == 1 && (csvPfad[0] == L'q' || csvPfad[0] == L'Q')) break;
 
-        // Anführungszeichen entfernen
         size_t len = wcslen(csvPfad);
         if (len > 1 && csvPfad[0] == L'"' && csvPfad[len-1] == L'"') {
             memmove(csvPfad, csvPfad+1, (len-2)*sizeof(wchar_t));
@@ -366,32 +513,26 @@ int main(void) {
         if (_waccess(csvPfad, 0) != 0) {
             wchar_t err[MAX_PFAD + 64];
             swprintf(err, MAX_PFAD + 64, L"Datei nicht gefunden: %s", csvPfad);
-            logFehler(err);
-            continue;
+            logFehler(err); continue;
         }
 
         FILE *datei = _wfopen(csvPfad, L"r");
         if (!datei) { logFehler(L"Datei konnte nicht geöffnet werden."); continue; }
 
-        // Dateigröße prüfen
         fseek(datei, 0, SEEK_END);
         if (ftell(datei) == 0) { logFehler(L"Datei ist leer."); fclose(datei); continue; }
         rewind(datei);
 
         if (leseKopfzeile(datei, &sep, spaltenNamen, &nSpalten)) { fclose(datei); continue; }
 
-        wprintf(L"\nSpalten gefunden (Trennzeichen: '%c'):\n", sep);
+        wprintf(L"\nSpalten (Trennzeichen: '%c'):\n", sep);
         for (int i = 0; i < nSpalten; i++) {
-            wchar_t wbuf[256];
-            konvertiere1252ZuWide(spaltenNamen[i], wbuf, 256);
+            wchar_t wbuf[256]; konvertiere1252ZuWide(spaltenNamen[i], wbuf, 256);
             wprintf(L"  [%d] %s\n", i, wbuf);
         }
 
-        // --- Schleife über mehrere Spaltenpaare ---
         int weiteresSpaltenpaar = 1;
         while (weiteresSpaltenpaar) {
-
-            // Spaltenwahl
             int idxQ = -1, idxZ = -1;
             do {
                 wprintf(L"\nNummer der Quellspalte (0-%d): ", nSpalten-1);
@@ -404,7 +545,6 @@ int main(void) {
                 leereStdin();
             } while (idxZ < 0 || idxZ >= nSpalten);
 
-            // Alias
             wprintf(L"Name für SQL-Spalte: ");
             wchar_t wtmp[256] = {0};
             fgetws(wtmp, 256, stdin);
@@ -413,23 +553,19 @@ int main(void) {
             WideCharToMultiByte(CP_ACP, 0, wtmp, -1, aliasSpalte, 255, NULL, NULL);
             aliasSpalte[255] = '\0';
 
-            // Format und ELSE-Wert
             AusgabeFormat format = waehleFormat();
             char elseWert[256] = "Unbekannt";
             if (format == FORMAT_CASE || format == FORMAT_DECODE)
                 waehleElseWert(elseWert, sizeof(elseWert));
 
-            // Daten lesen (Datei zurückspulen, Kopfzeile überspringen)
             rewind(datei);
             char skipbuf[MAX_ZEILE];
             fgets(skipbuf, MAX_ZEILE, datei);
 
             int count, skipEmpty, skipDup;
             leseDaten(datei, sep, idxQ, idxZ, daten, &count, &skipEmpty, &skipDup);
-            wprintf(L"\n%d Einträge geladen, %d leer übersprungen, %d Duplikate übersprungen\n",
-                    count, skipEmpty, skipDup);
+            wprintf(L"\n%d Einträge | %d leer | %d Duplikate\n", count, skipEmpty, skipDup);
 
-            // Ausgabedatei
             wchar_t outPfad[MAX_PFAD];
             wprintf(L"Ausgabedatei (Enter = FertigerCase.txt): ");
             fgetws(outPfad, MAX_PFAD, stdin);
@@ -439,7 +575,11 @@ int main(void) {
             speichereAusgabe(outPfad, spaltenNamen[idxQ], aliasSpalte, elseWert, format, daten, count);
             wprintf(L"\nGespeichert: %s\n", outPfad);
 
-            // Weiteres Spaltenpaar?
+            wprintf(L"In Zwischenablage kopieren? (j/n): ");
+            wchar_t clip = fgetwc(stdin);
+            leereStdin();
+            if (clip == L'j' || clip == L'J') kopiereInZwischenablage(outPfad);
+
             wprintf(L"\nWeiteres Spaltenpaar aus dieser Datei? (j/n): ");
             wchar_t ant = fgetwc(stdin);
             leereStdin();

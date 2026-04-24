@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.3.0 — April 2026
+
+### Casium.exe (Konsole)
+- Feature: Clipboard-Ausgabe — nach dem Generieren kann der SQL-Ausdruck direkt in die Zwischenablage kopiert werden
+- Feature: Batch-Modus — `casium.exe config.cfg` verarbeitet eine Konfigurationsdatei ohne Interaktion
+  - Konfigurationsformat: `csv=`, `quellspalte=`, `zielspalte=`, `alias=`, `format=`, `else=`, `ausgabe=`, `clipboard=`
+  - Kommentarzeilen mit `#` werden ignoriert
+- Versionsbump: v1.2.0 → v1.3.0
+
+### CasiumGUI (neu)
+- Neues C# WinForms-Projekt (net8.0-windows) als grafische Oberfläche
+- CSV-Datei laden per Datei-Dialog oder Drag & Drop
+- CSV-Vorschau als Tabelle (max. 500 Zeilen)
+- Spaltenauswahl per Dropdown, automatische Trennzeichenerkennung
+- Ausgabeformat wählbar: SQL CASE, DECODE, VALUES-Tabelle, JSON
+- ELSE-Wert konfigurierbar (leer = NULL)
+- SQL-Ausgabe direkt in der App mit dunklem Code-Bereich
+- "In Zwischenablage kopieren" und "Speichern als..." Buttons
+- Duplikat- und Leerzeilen-Zähler in der Statusleiste
+- Mehrere Spaltenpaare: einfach neue Auswahl treffen und erneut generieren
+
 ## v1.2.0 — April 2026
 
 - Feature: RFC-4180-konformer CSV-Parser — Felder mit Komma/Semikolon in Anführungszeichen werden korrekt geparst
