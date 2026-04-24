@@ -116,12 +116,12 @@ internal sealed class MainForm : Form
         tblBottom.Controls.Add(pnlBtns,   0, 2);
 
         // ── Middle: SplitContainer ────────────────────────────────────────
-        var split = new SplitContainer
+        var split = new SplitContainer { Dock = DockStyle.Fill };
+        Load += (_, _) =>
         {
-            Dock             = DockStyle.Fill,
-            SplitterDistance = 520,
-            Panel1MinSize    = 280,
-            Panel2MinSize    = 270
+            split.Panel1MinSize = 280;
+            split.Panel2MinSize = 270;
+            try { split.SplitterDistance = split.Width / 2; } catch { }
         };
 
         // Linke Seite: CSV-Vorschau
